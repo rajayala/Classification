@@ -1,0 +1,251 @@
+---
+title: "Project for Practical Machine Learning Course"
+author: "Raj Ayala"
+date: "January 24, 2015"
+output: html_document
+---
+
+#### This is the course project for the Applied Machine Learning course.
+
+#### In this project, data from a Human Activity Learning experiment is used. The data was collected from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+#### The goal of the project is to predict the manner in which they did the exercise. This is the “classe” variable in the training set.
+
+#### Here, we describe how we built your model, how cross validation is used, what the expected out of sample error is, and why we made the choices you did. We then apply the prediction model to predict 20 different test cases.
+
+### DATA PREPARATION
+
+#### Read data, eliminate NA columns and other unneeded columns
+
+```{r }
+library(AppliedPredictiveModeling)
+library(caret)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(MASS)
+library(klaR)
+
+## setwd("./Documents/datasciencecoursera")
+training <- read.csv("./data/pml-training.csv", stringsAsFactors = FALSE, na.strings = c("#DIV/0!", "NA", ""))
+testing <- read.csv("./data/pml-testing.csv", stringsAsFactors = FALSE, na.strings = c("#DIV/0!", "NA", ""))
+
+## Delete all rows where "new_window" is "yes" as this appears to be summary data with some invalid values
+
+training <- subset(training,  new_window != "yes")
+
+## Remove all columns with "all NA" values from both training and test data frames
+## If the count of NAs in a column is equal to the number of rows, it must be entirely NA.
+
+training <- training[,colSums(is.na(training)) != nrow(training)]
+
+## Remove first seven columns as they are not needed for prediction
+
+training <- training[, 8:ncol(training)]
+training$classe <- as.factor(training$classe)
+
+## Retain only identical columns in testing set, as in the training set, except for the last column, whose name is different
+
+namestrain <- colnames(training)
+namestrain <- namestrain[-length(namestrain)]   ## remove the last name, which is outcome "classe"
+
+testing <- testing[, c(namestrain, "problem_id")]
+
+# Verify that the column names (excluding classe and problem_id) are identical in the training and test set.
+
+namestest <- colnames(testing)
+namestest <- namestest[-length(namestest)]   ## remove the last name, which is outcome "problem_id"
+
+all.equal(namestrain, namestest)
+
+```
+
+#### At this point, we have reduced the data from 160 variables to 53 variables, one of them being the output variable, and hence we have 52 covariates. Let’s see if any of these coavariates have “near zero variance.”
+
+```{r}
+
+nzv <- nearZeroVar(training, saveMetrics=TRUE)
+nzv
+
+```
+
+#### We see that nzv is false for all of the covariants. So, we can’t eliminate any covariants at this point.
+
+### DATA PARTITIONING FOR MODEL BUILDING
+
+#### Try different statistical models and see how good they are
+
+#### First, split traing into subsets of training and test
+
+
+```{r}
+
+## Split traing data into 2 subsets to help build right model and experimenting and testing with different models
+
+## First, partition training data into 2 blocks
+set.seed(1234)
+index <- createDataPartition(y=training$classe, p=0.5, list=FALSE)
+block1 <- training[index,]
+block2 <- training[-index,]
+
+## Divide each of the 2 data blocks into training and test sets (60% to 40% ratio)
+set.seed(1234)
+inTrain <- createDataPartition(y=block1$classe, p=0.6, list=FALSE)
+train1 <- block1[inTrain,]
+test1 <- block1[-inTrain,]
+set.seed(1234)
+inTrain <- createDataPartition(y=block2$classe, p=0.6, list=FALSE)
+train2 <-block2[inTrain,]
+test2 <- block2[-inTrain,]
+
+```
+
+### 1. Classification Tree Model
+
+```{r}
+
+## Classification Tree
+## Run against training set 1
+set.seed(1234)
+modFit <- train(train1$classe ~ ., data = train1, method="rpart")
+print(modFit, digits=3)
+print(modFit$finalModel, digits=3)
+fancyRpartPlot(modFit$finalModel)
+
+## Run against test set 1 with same features as in training set
+
+pred <- predict(modFit, newdata=test1)
+print(confusionMatrix(pred, test1$classe), digits=4)
+
+```
+
+### As the accuracy is quite low (49.75%), let’s try preprocessing and cross validation of training data
+
+```{r}
+
+## Run with preprocessing only 
+set.seed(1234)
+modFit <- train(train1$classe ~., preProcess=c("center", "scale"), data=train1, method="rpart")
+print(modFit, digits=3)
+
+```
+
+#### Pre-processing did not change the accuracy of prediction. So, let’s try cross-validation now.
+
+```{r}
+
+## Run with cross-validation only 
+set.seed(1234)
+modFit <- train(train1$classe ~., trControl=trainControl(method = "cv", number = 4), data=train1, method="rpart")
+print(modFit, digits=3)
+
+```
+
+#### Cross-validation increased the accuracy just a little bit to 51.8%. Now, let’s try doing both pre-processing and cross validation, with classification tree.
+
+```{r}
+
+## Run preprocessing and cross validation on train1 data
+set.seed(1234)
+modFit <- train(train1$classe ~., preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4), data=train1, method="rpart")
+print(modFit, digits=3)
+
+## Run against test1 data with preprocessing and cross validation
+pred <- predict(modFit, newdata=test1)
+print(confusionMatrix(pred, test1$classe), digits=4)
+
+```
+
+#### Incorporating scaling as well as cross validation has not improved the prediction accuracy in training, and actually made it worse (49.75%) when the model was applied to testing data parttition of the block1 data. So, let’s try another model.
+
+### 2. Random Forest Model
+
+```{r}
+
+## Preprocess and cross validate train1 data.
+set.seed(1234)
+modFit <- train(train1$classe ~ ., method="rf", preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4), data=train1)
+print(modFit, digits=3)
+
+## Run model against test1 data.
+pred <- predict(modFit, newdata=test1)
+print(confusionMatrix(pred, test1$classe), digits=4)
+
+## Preprocess and cross validate train2 data.
+set.seed(1234)
+modFit <- train(train2$classe ~ ., method="rf", preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4), data=train2)
+print(modFit, digits=3)
+
+## Run model against test2 data.
+pred <- predict(modFit, newdata=test2)
+print(confusionMatrix(pred, test2$classe), digits=4)
+
+```
+
+#### Accuracy is vastly improved with Random Forest along with pre-processing and cross validation
+
+#### The accuracy for the two partitioned tset sets was 97.81% and 98% respectively.
+
+#### Now, run the model to predict the outcomes in the test set given for the project
+
+```{r}
+
+# Run against 20 testing set given.
+print(predict(modFit, testing))
+
+```
+
+
+#### At this point, let’s examine whether any any parametric model-based predictions yield good results.
+
+### 3. LINEAR DISCRIMINANT ANALYSIS
+
+```{r}
+
+## Linear Discriminant Analysis assumes that the probability function for class k (fk(x)) is Gaussian with same covariance
+
+set.seed(1234)
+modlda <- train(train1$classe ~ ., method="lda", data=train1)
+print(modlda, digits=3)
+
+```
+
+#### Interestingly, LDA gives better results than Classification tree, when there is no preprocessing or cross validation in both cases. The accuracy is 69.8%
+
+#### Now, let’s try LDA with precossing and cross-validation, and compare the results with pre-processed and cross-validated Classification Tree model.
+
+```{r}
+
+## Linear Discriminant Analysis (LDA) with preprocessing and cross-validation of train1 data.
+set.seed(1234)
+modlda <- train(train1$classe ~ ., method="lda", preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4), data=train1)
+print(modlda, digits=3)
+
+```
+
+#### LDA with preprocessing and cross-validation has increased the prediction accuracy to 70.2%
+
+#### As the scoring for the project is based on accuracy of predictions, we will go with the Random Forest model
+
+#### Out of Sample Error for the chosen Random Forest Model
+#### The error rate after running the predict() function on the 2 testing sets, created from training subsets are:
+
+##### - Random Forest (preprocessing and cross validation) Testing Set 1: 1 - .9781 = 0.0219
+
+##### - Random Forest (preprocessing and cross validation) Testing Set 2: 1 - .98 = 0.02
+
+### Since each testing set is roughly of equal size, we can average the out of sample error rates derived by applying the random forest method with both preprocessing and cross validation against test sets 1 & 2, yielding a predicted out of sample rate of 0.02095.
+
+### CONCLUSION
+
+#### Human Activity Recognition is an emerging technology which has wide variety of applications from medical to driver safety. This project uses the data fromUgulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers’ Data Classification of Body Postures and Movements, to classify the activity based on accelerometers on the belt, forearm, arm, and dumbell of a set of test participants.
+
+#### The approach taken is to create further data partitions from the trainng data, building different models, using the models to predict the outcome variable (classe), estimating the accuracy of predictions, and then choosing the model which has highest accuracy to predict against the 20 cases given in th etesting data.
+
+#### The models considered were Classification Tree, Linear Discriminant Analysis, and Random Forest. Data pre-processing and cross validation were applied to improve the acuuracy. The estimated accuracy for Classification Tree was about 50%, and it was about 70% for LDA, and 98% for Random Forest model.
+
+#### The Random Forest model was applied to the testing data of 20 cases and all 20 cases were predicted accurately.
+
+
+
